@@ -125,7 +125,6 @@ class BaseUser:  # _BaseUser):
         data = await self._state.get_user_friends(await self.id)
         return [User(state=self._state, data=friend) for friend in data]
 
-    @async_property
     async def friends(self):
         for friend in await self.friends_iter():
             yield friend
@@ -136,7 +135,7 @@ class BaseUser:  # _BaseUser):
 
         if other:  # can't use API endpoint on user other than client
             await other._get_profile_data()
-            return other in await self.friends
+            return other in await self.friends_iter
 
         other = other or self._state.client.user
 

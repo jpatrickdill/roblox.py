@@ -1,4 +1,6 @@
 venv/
 .idea/
+dist/
+__pycache__/
 *.__pyc__
 test.py

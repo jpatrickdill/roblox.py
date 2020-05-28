@@ -546,3 +546,10 @@ class Session:
             else:
                 if resp.status == 409:
                     raise AuthError("Not authorized to download asset")
+
+    async def delete_from_inventory(self, asset_id):
+        async with self.req("post", Url.Roblox + "/asset/delete-from-inventory", params={"assetId": asset_id}) as resp:
+            if ok(resp):
+                return True
+            else:
+                raise AssetError
