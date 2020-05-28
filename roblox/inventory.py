@@ -27,4 +27,4 @@ class Inventory:
                 yield asset
 
     async def contains(self, asset):
-        pass
+        return await self._state.has_asset(await self.user.id, await asset.id)

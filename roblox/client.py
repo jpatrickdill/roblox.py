@@ -80,7 +80,7 @@ class Roblox:
 
         return r
 
-    async def friend_requests(self):
+    async def get_friend_requests(self):
         async for data in self._state.get_friend_requests():
             yield FriendRequest(state=self._state, data=data)
 

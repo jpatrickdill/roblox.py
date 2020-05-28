@@ -121,9 +121,14 @@ class BaseUser:  # _BaseUser):
         return await self._state.is_premium(await self.id)
 
     @async_property
-    async def friends(self):
+    async def friends_iter(self):
         data = await self._state.get_user_friends(await self.id)
         return [User(state=self._state, data=friend) for friend in data]
+
+    @async_property
+    async def friends(self):
+        for friend in await self.friends_iter():
+            yield friend
 
     async def is_friends(self, other=None):
         if self == other or not isinstance(other, BaseUser):

@@ -440,6 +440,14 @@ class Session:
                 else:
                     raise PurchaseError(data.get("errorMsg"))
 
+    async def has_asset(self, user_id, asset_id):
+        async with self.req("get", Url.Api + "/ownership/hasasset", params={"userId": user_id,
+                                                                            "assetId": asset_id}) as resp:
+            if ok(resp):
+                return await resp.json()
+            else:
+                raise UserError(await resp.text())
+
     async def favorites_count(self, asset_id):
         async with self.req("get", Url.Catalog + "/favorites/assets/{}/count".format(asset_id)) as resp:
             if ok(resp):
