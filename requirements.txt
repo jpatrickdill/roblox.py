@@ -1,0 +1,5 @@
+aiohttp
+async-property
+cached-property
+chardet
+maya
