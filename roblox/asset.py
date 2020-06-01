@@ -1,11 +1,15 @@
 import logging
 
 import maya
+from CaseInsensitiveDict import CaseInsensitiveDict
 from async_property import async_property, async_cached_property
 
 from roblox.enums import AssetType
+from roblox.abc import Asset as _BaseAsset
 from roblox.errors import *
+from functools import wraps
 from roblox.http import Session
+from roblox.util import urlify
 
 log = logging.getLogger(__name__)
 
@@ -16,6 +20,7 @@ def p_info(name, nocache=False):
     ProductInfo API endpoint"""
 
     def decorator(fn):
+        @wraps(fn)
         async def new_fn(self):
             if nocache or self._data[name] is None:
                 await self._get_product_info()
@@ -23,15 +28,20 @@ def p_info(name, nocache=False):
             return self._data[name]
 
         return new_fn
+
     return decorator
 
 
-class Asset:
+class Asset(_BaseAsset):
+    """
+    Represents a Roblox Asset.
+    """
+
     __slots__ = ("_data", "_state")
 
     def __init__(self, *, state: Session, data):
         self._state = state
-        self._data = {
+        self._data = CaseInsensitiveDict({
             "name": None,
             "description": None,
             "id": None,
@@ -48,8 +58,7 @@ class Asset:
             "remaining": None,
             "serialnumber": None,
             "creator": None
-        }
-
+        })
         self._update(data)
 
     def __repr__(self):
@@ -81,32 +90,86 @@ class Asset:
     @async_property
     @p_info("name")
     async def name(self):
+        """|asyncprop|
+
+        The asset's name.
+
+        :rtype: str
+        """
+
         pass
 
     @async_property
     @p_info("description")
     async def description(self):
+        """|asyncprop|
+
+        The asset's description.
+
+        :rtype: str
+        """
+
         pass
 
     @async_property
     @p_info("id")
     async def id(self):
+        """|asyncprop|
+
+        The asset's ID.
+
+        :rtype: int
+        """
+
         pass
 
     @async_property
     async def type(self):
+        """|asyncprop|
+
+        The asset's type.
+
+        :rtype: :class:`.AssetType`
+        """
+
         if self._data["assettypeid"] is None:
             await self._get_product_info()
 
         return AssetType(self._data["assettypeid"])
 
     @async_property
+    async def url(self):
+        """|asyncprop|
+
+        URL to the asset's page.
+
+        :rtype: str
+        """
+
+        safe_name = urlify(await self.name)
+        return "https://roblox.com/library/{}/{}".format(await self.id, safe_name)
+
+    @async_property
     @p_info("productid")
     async def product_id(self):
+        """|asyncprop|
+
+        The asset's product ID.
+
+        :rtype: int
+        """
+
         pass
 
     @async_property
     async def created_at(self):
+        """|asyncprop|
+
+        Time at which the asset was created.
+
+        :rtype: :class:`datetime.datetime`
+        """
+
         if self._data["created"] is None:
             await self._get_product_info()
 
@@ -117,6 +180,13 @@ class Asset:
 
     @async_cached_property
     async def updated_at(self):
+        """|asyncprop|
+
+        Time at which the asset was last updated.
+
+        :rtype: :class:`datetime.datetime`
+        """
+
         if self._data["updated"] is None:
             await self._get_product_info()
 
@@ -128,15 +198,36 @@ class Asset:
     @async_property
     @p_info("price", nocache=True)
     async def price(self):
+        """|asyncprop|
+
+        The asset's purchase price.
+
+        :rtype: int
+        """
+
         pass
 
     @async_property
     @p_info("sales", nocache=True)
     async def sales(self):
+        """|asyncprop|
+
+        Number of sales the asset has.
+
+        :rtype: int
+        """
+
         pass
 
     @async_property
     async def for_sale(self):
+        """|asyncprop|
+
+        Whether the asset can be purchased/taken.
+
+        :rtype: bool
+        """
+
         if self._data["isforsale"] is None and self._data["ispublicdomain"] is None:
             await self._get_product_info()
 
@@ -144,6 +235,13 @@ class Asset:
 
     @async_property
     async def creator(self):
+        """|asyncprop|
+
+        The asset's creator.
+
+        :rtype: :class:`.User`
+        """
+
         if self._data["creator"] is None:
             await self._get_product_info()
 
@@ -153,31 +251,72 @@ class Asset:
 
     @async_property
     async def favorites(self):
+        """|asyncprop|
+
+        Number of favorites the asset has.
+
+        :rtype: int
+        """
+
         return await self._state.favorites_count(await self.id)
 
     @async_property
     async def is_favorited(self):
+        """|asyncprop|
+
+        Whether the client has favorited the asset.
+
+        :rtype: bool
+        """
+
         model = await self._state.favorite_model(await self._state.client.user.id, await self.id)
 
         return False if model is None else True
 
     async def favorite(self):
+        """
+        Favorites the asset.
+        """
+
         return await self._state.create_favorite(await self._state.client.user.id, await self.id)
 
     async def unfavorite(self):
+        """
+        Unfavorites the asset.
+        """
+
         return await self._state.delete_favorite(await self._state.client.user.id, await self.id)
 
     async def toggle_favorite(self):
+        """
+        Toggles the asset's favorite.
+        """
+
         if await self.is_favorited:
             return await self.unfavorite()
         else:
             return await self.favorite()
 
-    async def purchase(self, expected_price=None):
+    async def purchase(self, expected_price: int = None):
+        """
+        Purchases the asset from the client user.
+
+        Args:
+            expected_price: Price to check the asset against before purchasing. Asset will not be purchased if the
+                            current price doesn't match the expected price.
+        """
+
         expected_price = expected_price or await self.price
         expected_seller = await (await self.creator).id
 
         return await self._state.purchase_product(await self.product_id, expected_price, expected_seller)
+
+    async def delete(self):
+        """
+        Deletes the asset from the client user's inventory.
+        """
+
+        return await self._state.delete_from_inventory(await self.id)
 
     async def download(self, path):
         file = open(path, "wb")

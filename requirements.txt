@@ -3,3 +3,4 @@ async-property
 cached-property
 chardet
 maya
+CaseInsensitiveDict

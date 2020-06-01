@@ -4,6 +4,7 @@ import logging
 import re
 
 import aiohttp
+from aiohttp import FormData
 import chardet
 
 from roblox.errors import *
@@ -16,6 +17,7 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML
 # util
 xsrf = re.compile(r"setToken\('(.{4,16})'\);")
 url = re.compile("<url>(.+)</url>")
+rvt = re.compile(r'<input name="?__RequestVerificationToken"?[ \w=]+value="?(\S+)"?>')
 
 
 # base URLs
@@ -33,6 +35,8 @@ class Url:
     Economy = "https://economy.roblox.com/v1"
     Economy2 = "https://economy.roblox.com/v2"
     AssetDelivery = "https://assetdelivery.roblox.com/v1"
+    Group1 = "https://groups.roblox.com/v1"
+    Group2 = "https://groups.roblox.com/v2"
 
 
 def ok(resp):
@@ -63,6 +67,13 @@ class Session:
         if match:
             self.token = match.group(1)
             log.info("Updated XSRF token: {!r}".format(self.token))
+
+    def get_rvt(self, text):
+        # attempts to get RequestVerificationToken from HTML
+
+        match = rvt.search(text)
+        if match:
+            return match.group(1)
 
     def req(self, *args, **kwargs):
         # prepared request method
@@ -221,7 +232,7 @@ class Session:
 
         async with self.req("patch", Url.Users + "/users/{}/status".format(user_id), json=payload) as resp:
             if ok(resp):
-                return (await resp.json())
+                return await resp.json()
             else:
                 if resp.status == 403:
                     raise AuthError("Not authorized to update status")
@@ -277,11 +288,12 @@ class Session:
                 raise AuthError
 
     async def decline_all_friend_requests(self):
-        async with self.req("post", Url.Friends + "/user/friend-requests/decline-all") as resp:
+        async with self.req("post", Url.Friends + "/user/friend-requests/decline-all",
+                            headers={"Host": "friends.roblox.com"}) as resp:
             if ok(resp):
                 return True
             else:
-                raise AuthError
+                raise AuthError(await resp.text())
 
     async def accept_friend_request(self, user_id):
         async with self.req("post", Url.Friends + "/users/{}/accept-friend-request".format(user_id)) as resp:
@@ -498,6 +510,45 @@ class Session:
                 elif resp.status == 409:
                     raise AssetError("Asset already favorited")
 
+    async def universe_favorited(self, universe_id):
+        async with self.req("get", Url.Game1 + "/games/{}/favorites".format(universe_id)) as resp:
+            if ok(resp):
+                return await resp.json()
+            elif resp.status == 400:
+                raise GameNotFound("Invalid Root Place")
+            elif resp.status == 401:
+                raise AuthError
+            elif resp.status == 400:
+                raise GameNotFound
+
+    async def universe_favorites(self, universe_id):
+        async with self.req("get", Url.Game1 + "/games/{}/favorites/count".format(universe_id)) as resp:
+            if ok(resp):
+                return await resp.json()
+            elif resp.status == 400:
+                raise GameNotFound("Invalid Root Place")
+            elif resp.status == 401:
+                raise AuthError
+            elif resp.status == 400:
+                raise GameNotFound
+
+    async def favorite_universe(self, universe_id, favorite):
+        payload = {
+            "isFavorited": favorite
+        }
+        async with self.req("post", Url.Game1 + "/games/{}/favorites".format(universe_id), json=payload) as resp:
+            data = await resp.json()
+            if ok(resp):
+                return data
+            elif resp.status == 400:
+                raise GameNotFound("Invalid Root Place")
+            elif resp.status == 401:
+                raise AuthError
+            elif resp.status == 400:
+                raise GameNotFound
+            else:
+                raise UserError(str(data))
+
     async def get_place_details(self, *place_id):
         ids = ",".join([str(i) for i in place_id])
         async with self.req("get", Url.Game1 + "/games/multiget-place-details", params={"placeIds": ids}) as resp:
@@ -553,3 +604,69 @@ class Session:
                 return True
             else:
                 raise AssetError
+
+    async def get_group_details(self, group_id):
+        async with self.req("get", Url.Group1 + "/groups/{}".format(group_id)) as resp:
+            if ok(resp):
+                return await resp.json()
+            else:
+                raise GroupNotFound("Couldn't find group {!r}".format(group_id))
+
+    async def get_group_roles(self, group_id):
+        async with self.req("get", Url.Group1 + "/groups/{}/roles".format(group_id)) as resp:
+            if ok(resp):
+                return await resp.json()
+            else:
+                raise GroupNotFound("Couldn't find group {!r}".format(group_id))
+
+    async def get_group_members(self, group_id):
+        async for data in self.gen_pages(Url.Group1 + "/groups/{}/users".format(group_id)):
+            yield data
+
+    async def get_role_details(self, *role_id):
+        role_ids = ",".join([str(i) for i in role_id])
+        async with self.req("get", Url.Group1 + "/roles", params={"ids": role_ids}) as resp:
+            if ok(resp):
+                return await resp.json()
+            else:
+                raise RoleNotFound
+
+    async def get_user_roles(self, user_id):
+        async with self.req("get", Url.Group1 + "/users/{}/groups/roles".format(user_id)) as resp:
+            if ok(resp):
+                return await resp.json()
+            else:
+                print(await resp.text())
+                raise UserError
+
+    async def upload_asset(self, file, name, asset_type, group_id=None):
+        rvturl = Url.Roblox + "/develop"
+        if group_id is not None:
+            rvturl = Url.Roblox + "/develop/groups/{}".format(group_id)
+
+        async with self.req("get", rvturl, params={"View": asset_type}) as resp:
+            rvt = self.get_rvt(await resp.text())
+            if rvt is None:
+                print(resp.status, resp.url)
+                raise AuthError("No Request Verification Token Found")
+            log.debug("__RequestVerificationToken: {}".format(rvt))
+
+        form = aiohttp.FormData({
+            "__RequestVerificationToken": str(rvt),
+            "assetTypeId": str(asset_type),
+            "name": name,
+            "isOggUploadEnabled": "True",
+            "isTgaUploadEnabled": "True",
+            # "onVerificationPage": "False",
+            "captchaEnabled": "False"
+        })
+
+        form.add_field("file", file)
+
+        if group_id is not None:
+            form.add_field("groupId", str(group_id))
+
+        async with self.req("post", Url.Roblox + "/build/upload", data=form) as resp:
+            print(resp.status)
+            print(resp.url)
+            return ok(resp)

@@ -7,6 +7,10 @@ class AvatarType(Enum):
 
 
 class AssetType(IntEnum):
+    """
+    https://developer.roblox.com/en-us/api-reference/enum/AssetType
+    """
+
     Image = 1
     TeeShirt = 2
     Audio = 3

@@ -1,9 +1,12 @@
 import logging
+from abc import ABC
 
 import maya
+from CaseInsensitiveDict import CaseInsensitiveDict
 from async_property import async_property, async_cached_property
 
 from roblox.asset import Asset
+from roblox.abc import Universe as _BaseUniverse
 from roblox.http import Session
 
 log = logging.getLogger(__name__)
@@ -67,12 +70,12 @@ def g_info(name, nocache=False):
     return decorator
 
 
-class Universe:
+class Universe(_BaseUniverse):
     __slots__ = ("_data", "_state")
 
     def __init__(self, *, state: Session, data):
         self._state = state
-        self._data = {
+        self._data = CaseInsensitiveDict({
             "name": None,
             "description": None,
             "id": None,
@@ -90,18 +93,21 @@ class Universe:
             "createvipserversallowed": None,
             "universeavatartype": None,
             "genre": None
-        }
+        })
 
         self._update(data)
 
     def __repr__(self):
         return "Universe({!r})".format(self._data["name"] or self._data["id"])
 
+    def __hash__(self):
+        return hash(self._data["id"] or -1)
+
     def _update(self, data):
         for k in list(data.keys()):
             data[k.lower()] = data[k]
 
-        self._data.update(**data)
+        self._data.update(data)
 
     async def _get_game_details(self):
         details = (await self._state.get_game_details(await self.id))["data"][0]
@@ -175,3 +181,21 @@ class Universe:
     @g_info("maxplayers", nocache=True)
     async def max_players(self):
         pass
+
+    @property
+    async def is_favorited(self) -> bool:
+        data = await self._state.universe_favorited(await self.id)
+        return data.get("isFavorited")
+
+    async def favorite(self):
+        await self._state.favorite_universe(await self.id, True)
+        return True
+
+    async def unfavorite(self):
+        await self._state.favorite_universe(await self.id, False)
+        return True
+
+    @property
+    async def favorites(self) -> int:
+        data = await self._state.universe_favorites(await self.id)
+        return data.get("favoritesCount")

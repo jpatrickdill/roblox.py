@@ -54,3 +54,25 @@ class PriceChanged(PurchaseError):
 
 class GameNotFound(AssetNotFound):
     pass
+
+
+# GROUP ERRORS
+
+class GroupError(RobloxException):
+    pass
+
+
+class GroupNotFound(GroupError):
+    pass
+
+
+class UserNotInGroup(GroupError):
+    pass
+
+
+class RoleError(GroupError):
+    pass
+
+
+class RoleNotFound(RoleError):
+    pass

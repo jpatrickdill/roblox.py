@@ -1,25 +1,28 @@
+from __future__ import annotations
 import logging
 
 import maya
+from CaseInsensitiveDict import CaseInsensitiveDict
 from async_property import async_property, async_cached_property
 from cached_property import cached_property
 
-from roblox.abc import User as _User
+from roblox.abc import User as _BaseUser
+from roblox.abc import ClientUser as _ClientUser
+from roblox.abc import OtherUser as _User
 from roblox.errors import *
 from roblox.http import Session
+from roblox.iterables import AsyncIterator
 from roblox.inventory import Inventory
-
-_BaseUser = _User
 
 log = logging.getLogger(__name__)
 
 
-class BaseUser:  # _BaseUser):
+class BaseUser(_BaseUser):  # _BaseUser):
     __slots__ = ("_data", "_state")
 
     def __init__(self, *, state: Session, data):
         self._state = state
-        self._data = {
+        self._data = CaseInsensitiveDict({
             "username": None,
             "name": None,
             "id": None,
@@ -27,12 +30,7 @@ class BaseUser:  # _BaseUser):
             "description": None,
             "status": None,
             "isBanned": None
-        }
-
-        for name in self.__slots__:
-            if not hasattr(self, name):
-                setattr(self, name, None)
-
+        })
         self._update(data)
 
         if self._data["username"] is None and self._data["id"] is None:
@@ -51,14 +49,16 @@ class BaseUser:  # _BaseUser):
         if not isinstance(other, BaseUser):
             return False
 
-        return (self._data["id"] == other._data["id"] and self._data["id"] is not None) or \
-               (self._data["username"] is not None and other._data["username"] is not None and
-                self._data["username"].lower() == other._data["username"].lower()
-                )
+        if self._data["id"] == other._data["id"] and self._data["id"] is not None:
+            return True
+        elif (self._data["username"] is not None) and (other._data["username"] is not None):
+            return self._data["username"].lower() == other._data["username"].lower()
+        else:
+            return False
 
     def _update(self, data):
-        data.setdefault("username", data.get("name"))
-        data.setdefault("username", data.get("displayName"))
+        data["username"] = data.get("username", data.get("name", data.get("displayname", data.get("displayName"))))
+        data["id"] = data.get("id", data.get("userid", data.get("userId")))
 
         self._data.update(data)
 
@@ -68,6 +68,13 @@ class BaseUser:  # _BaseUser):
 
     @async_cached_property
     async def id(self):
+        """|asyncprop|
+
+        The user's ID.
+
+        :rtype: int
+        """
+
         if self._data["id"] is None:
             new = await self._state.get_by_username(self._data["username"])
             self._update(new)
@@ -76,6 +83,13 @@ class BaseUser:  # _BaseUser):
 
     @async_cached_property
     async def username(self):
+        """|asyncprop|
+
+        The user's username.
+
+        :rtype: str
+        """
+
         if self._data["username"] is None:
             await self._get_profile_data()
 
@@ -83,10 +97,48 @@ class BaseUser:  # _BaseUser):
 
     @async_cached_property
     async def url(self):
+        """|asyncprop|
+
+        The user's profile URL.
+
+        :rtype: str
+        """
+
         return "https://www.roblox.com/users/{}/profile".format(await self.id)
+
+    @async_property
+    async def description(self):
+        """|asyncprop|
+
+        The user's profile description.
+
+        :rtype: str
+        """
+
+        if self._data["description"] is None:
+            await self._get_profile_data()
+
+        return self._data["description"]
+
+    async def status(self):
+        """|coro|
+
+        The user's current status message.
+
+        :rtype: str
+        """
+
+        self._update(await self._state.user_status(await self.id))
+
+        return self._data["status"]
 
     @async_cached_property
     async def created_at(self):
+        """|asyncprop|
+
+        :class:`datetime.datetime` at which the user was created.
+        """
+
         if self._data["created"] is None:
             await self._get_profile_data()
 
@@ -96,21 +148,14 @@ class BaseUser:  # _BaseUser):
             return None
 
     @async_property
-    async def description(self):
-        if self._data["description"] is None:
-            await self._get_profile_data()
-
-        return self._data["description"]
-
-    @async_property
-    async def status(self):
-        if self._data["status"] is None:
-            self._update(await self._state.user_status(await self.id))
-
-        return self._data["status"]
-
-    @async_property
     async def is_banned(self):
+        """|asyncprop|
+
+        Whether the user is currently banned.
+
+        :rtype: bool
+        """
+
         if self._data["isBanned"] is None:
             await self._get_profile_data()
 
@@ -118,24 +163,49 @@ class BaseUser:  # _BaseUser):
 
     @async_property
     async def is_premium(self):
+        """|asyncprop|
+
+        Whether the user is currently a premium member.
+
+        :rtype: bool
+        """
+
         return await self._state.is_premium(await self.id)
 
-    @async_property
-    async def friends_iter(self):
+    async def _friends_iter(self):
         data = await self._state.get_user_friends(await self.id)
         return [User(state=self._state, data=friend) for friend in data]
 
-    async def friends(self):
-        for friend in await self.friends_iter():
-            yield friend
+    @property
+    def friends(self):
+        """
+        :class:`.AsyncIterator` for this user's friends.
 
-    async def is_friends(self, other=None):
+        Yields:
+            :class:`User`
+        """
+
+        async def gen():
+            for friend in await self._friends_iter():
+                yield friend
+
+        return AsyncIterator(gen=gen(), state=self._state)
+
+    async def is_friends(self, other: User = None):
+        """|coro|
+
+        Checks whether this user is friends with another user or the client user.
+
+        Args:
+            other: User to check friendship with. If not specified, this will be the client user.
+        """
+
         if self == other or not isinstance(other, BaseUser):
             return False
 
         if other:  # can't use API endpoint on user other than client
             await other._get_profile_data()
-            return other in await self.friends_iter
+            return other in await self._friends_iter()
 
         other = other or self._state.client.user
 
@@ -145,75 +215,90 @@ class BaseUser:  # _BaseUser):
 
     @property
     def followers(self):
-        return FollowerList(state=self._state, user=self)
+        """
+        :class:`.AsyncIterator` for user's followers.
+
+        Yields:
+            :class:`.User`
+        """
+
+        return FollowerList(state=self._state, opts={"user": self})
 
     @property
     def followings(self):
-        return FollowingList(state=self._state, user=self)
+        """
+        :class:`.AsyncIterator` for user's followings.
+
+        Yields:
+            :class:`.User`
+        """
+
+        return FollowingList(state=self._state, opts={"user": self})
 
     following = followings
 
     @cached_property
     def inventory(self):
-        return Inventory(state=self._state, user=self)
+        """
+        :class:`.Inventory` for this user.
+        """
+        return Inventory(state=self._state, opts={"user": self})
 
-    async def games(self, access_filter=None):
-        async for data in self._state.get_user_games(await self.id,
-                                                     access_filter=str(access_filter) if access_filter else None):
-            yield await self._state.client.get_universe(data["id"], data)
+    @property
+    def games(self):
+        """
+        :class:`.AsyncIterator` for this user's games.
 
-    @async_property
-    async def robux(self):
-        return (await self._state.get_currency(await self.id))["robux"]
+        Yields:
+            :class:`.Universe`
+        """
+
+        access_filter = None
+
+        async def gen():
+            async for data in self._state.get_user_games(await self.id,
+                                                         access_filter=str(access_filter) if access_filter else None):
+                yield await self._state.client.get_universe(data["id"], data=data)
+
+        return AsyncIterator(gen=gen())
 
 
-class FollowerList:
-    __slots__ = ("_state", "user")
-
-    def __init__(self, *, state, user):
-        self._state = state
-        self.user = user
-
+class FollowerList(AsyncIterator):
     async def __aiter__(self):
-        async for follower_data in self._state.followers(await self.user.id):
-            yield User(state=self._state, data=follower_data)
-
-    @async_property
-    async def count(self):
-        return await self._state.follower_count(await self.user.id)
-
-    async def contains(self, other):
-        async for user in self:
-            if await user.id == await other.id:
-                return True
-
-        return False
-
-
-class FollowingList:
-    __slots__ = ("_state", "user")
-
-    def __init__(self, *, state, user):
-        self._state = state
-        self.user = user
-
-    async def __aiter__(self):
-        async for following_data in self._state.followings(await self.user.id):
+        async for following_data in self._state.followers(await self._opts["user"].id):
             yield User(state=self._state, data=following_data)
 
     @async_property
     async def count(self):
-        return await self._state.followings_count(await self.user.id)
-
-    async def contains(self, other):
-        async for user in self:
-            if await user.id == await other.id:
-                return True
-
-        return False
+        return await self._state.followings_count(await self._opts["user"].id)
 
 
-class ClientUser(BaseUser):
+class FollowingList(AsyncIterator):
+    async def __aiter__(self):
+        async for following_data in self._state.followings(await self._opts["user"].id):
+            yield User(state=self._state, data=following_data)
+
+    @async_property
+    async def count(self):
+        return await self._state.followings_count(await self._opts["user"].id)
+
+
+class ClientUser(BaseUser, _ClientUser):
+    """
+    The ClientUser provides the same functionalities as :class:`User` as well as some
+    methods that only apply to the client.
+
+    **Operations**
+
+        **x == y**
+
+        Checks that two users are equal.
+
+        **x != y**
+
+        Checks that two users are not equal.
+    """
+
     def __init__(self, *, state, data):
         super().__init__(state=state, data=data)
 
@@ -223,15 +308,50 @@ class ClientUser(BaseUser):
     def __hash__(self):
         return self._data["id"] or -2
 
-    async def set_status(self, status):
+    async def set_status(self, status: str):
+        """|coro|
+
+        Posts a new status to the client's profile.
+
+        Args:
+            status: New status to post.
+        Returns:
+            (str) Moderated status content.
+        """
+
         data = await self._state.post_status(await self.id, status)
 
         self._update(data)
         return data["status"]
 
+    @async_property
+    async def robux(self):
+        """|asyncprop|
 
-class User(BaseUser):
-    """Represents user other than the Client."""
+        Amount of currency the client user has.
+
+        :rtype: int
+        """
+        return (await self._state.get_currency(await self.id))["robux"]
+
+
+class User(BaseUser, _User):
+    """
+    Represents a Roblox user.
+
+    To get a specific user, use :meth:`.Roblox.get_user`
+
+    **Operations**
+
+        **x == y**
+
+        Checks that two users are equal.
+
+        **x != y**
+
+        Checks that two users are not equal.
+
+    """
 
     def __init__(self, *, state, data):
         super().__init__(state=state, data=data)
@@ -239,27 +359,45 @@ class User(BaseUser):
     def __hash__(self):
         return self._data["id"] or -2
 
-    async def unfriend(self):
-        await self._state.unfriend(await self.id)
-        log.debug("unfriended {}".format(self))
-
     async def follow(self):
+        """|coro|
+
+        Follows the user from the client.
+        """
+
         await self._state.follow(await self.id)
         log.debug("followed {}".format(self))
 
     async def unfollow(self):
+        """|coro|
+
+        Unfollows the user from the client.
+        """
+
         await self._state.unfollow(await self.id)
         log.debug("unfollowed {}".format(self))
 
     async def request_friendship(self):
+        """|coro|
+
+        Sends a friend request to the user.
+        """
+
         return await self._state.request_friendship(await self.id)
+
+    async def unfriend(self):
+        """|coro|
+
+        Unfriends the user if friends.
+        """
+
+        await self._state.unfriend(await self.id)
+        log.debug("unfriended {}".format(self))
 
 
 class FriendRequest(User):
     """Represents a user requesting friendship with the client. This class is used to provide accept/decline methods
-    while still allowing you to get user data.
-
-    Inherits from :class:`User`"""
+    while still allowing you to get user data."""
 
     def __init__(self, *, state, data):
         super().__init__(state=state, data=data)
