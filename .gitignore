@@ -1,6 +1,7 @@
 venv/
 .idea/
 dist/
+docs/build/
 __pycache__/
 *.__pyc__
 test.py
