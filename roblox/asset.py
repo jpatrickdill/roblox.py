@@ -228,8 +228,7 @@ class Asset(_BaseAsset):
         :rtype: bool
         """
 
-        if self._data["isforsale"] is None and self._data["ispublicdomain"] is None:
-            await self._get_product_info()
+        await self._get_product_info()
 
         return self._data["isforsale"] or self._data["ispublicdomain"]
 
@@ -317,6 +316,30 @@ class Asset(_BaseAsset):
         """
 
         return await self._state.delete_from_inventory(await self.id)
+
+    async def configure_sales(self, on_sale=False, price=5):
+        payload = {
+            "saleStatus": "OnSale" if on_sale else "OffSale"
+        }
+        if on_sale:
+            payload["priceConfiguration"] = {
+                "priceInRobux": price
+            }
+
+        print(payload)
+
+        return await self._state.configure_asset_sales(await self.id, payload, on_sale != await self.for_sale)
+
+    async def configure(self, name=None, description=None, enable_comments=None, genres=None, allow_copying=None):
+        payload = {
+            "name": name or await self.name,
+            "description": description or await self.description,
+            "enable_comments": enable_comments if enable_comments is not None else False,
+            "genres": genres or ["All"],
+            "allow_copying": allow_copying if allow_copying is not None else False
+        }
+
+        return await self._state.configure_asset(await self.id, payload)
 
     async def download(self, path):
         file = open(path, "wb")

@@ -16,7 +16,7 @@ from roblox.http import Session
 from roblox.iterables import AsyncIterator
 from roblox.user import User, BaseUser
 from roblox.util import urlify
-from typing import Union
+from typing import Union, List, Optional
 
 log = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ def g_info(name, nocache=False):
 
 
 class Group(_Group):
-    __slots__ = ("_data", "_state")
+    __slots__ = ("_data", "_state", "_perm_data")
 
     def __init__(self, *, state: Session, data):
         self._state = state
@@ -55,6 +55,7 @@ class Group(_Group):
             "publicentryallowed": None,
             "islocked": None
         })
+        self._perm_data = None
         self._update(data)
 
     def __repr__(self):
@@ -75,6 +76,18 @@ class Group(_Group):
     async def _get_group_details(self):
         data = await self._state.get_group_details(await self.id)
         self._update(data)
+
+    async def _get_perm_data(self):
+        data = await self._state.get_permissions(await self.id)
+
+        self._perm_data = {}
+        for role_perms in data["data"]:
+            all_perms = {}
+            for category, items in role_perms["permissions"].items():
+                for arg, val in items.items():
+                    all_perms[arg] = val
+
+            self._perm_data[role_perms["role"]["id"]] = all_perms
 
     @async_property
     @g_info("id")
@@ -165,7 +178,7 @@ class Group(_Group):
         return "https://roblox.com/groups/{}/{}#!/about".format(self._data["id"], urlify(self._data["name"]))
 
     @async_property
-    async def shout(self):
+    async def shout(self) -> Optional[Shout]:
         """|asyncprop|
 
         The group's current shout.
@@ -181,7 +194,7 @@ class Group(_Group):
             return None
 
     @async_property
-    async def roles(self, reverse=False):
+    async def roles(self, reverse=False) -> List[Role]:
         """|asyncprop|
 
         List of the group's roles.
@@ -189,18 +202,20 @@ class Group(_Group):
         :rtype: List[:class:`.Role`]
         """
 
+        await self._get_perm_data()
+
         data = await self._state.get_group_roles(await self.id)
         roles = []
         for role in data["roles"]:
             roles.append(
-                Role(state=self._state, data=role, group=self)
+                Role(state=self._state, data=role, perm_data=self._perm_data[role["id"]], group=self)
             )
 
         roles.sort(key=lambda r: r._data["rank"], reverse=reverse)
 
         return roles
 
-    async def get_role(self, role: Union[str, int]):
+    async def get_role(self, role: Union[str, int]) -> Role:
         """
         Attempts to find a role within a group given a name or ID.
 
@@ -228,7 +243,7 @@ class Group(_Group):
 
         return _MembersIterator(state=self._state, opts={"group": self})
 
-    async def get_member(self, user):
+    async def get_member(self, user) -> GroupMember:
         """
         Tries to find a group member given a username, ID, or :class:`.User`.
 
@@ -271,16 +286,16 @@ class Group(_Group):
         if isinstance(file, str):
             file = open(file, "rb")
 
-        r = await self._state.upload_asset(file, name, int(asset_type), group_id=await self.id)
+        r, r1 = await self._state.upload_asset(file, name, int(asset_type), group_id=await self.id)
 
         file.close()
-        return r
+        return r, r1
 
 
 class _MembersIterator(AsyncIterator):
     async def __aiter__(self):
         async for data in self._state.get_group_members(await self._opts["group"].id):
-            yield GroupMember(state=self._state, data=data, group=self)
+            yield GroupMember(state=self._state, data=data, group=self._opts["group"])
 
     async def count(self):
         await self._opts["group"]._get_group_details()
@@ -390,7 +405,7 @@ class GroupMember(User, _GroupMember):
     """
     __slots__ = ("_state", "_data", "group")
 
-    def __init__(self, *, state, data, group):
+    def __init__(self, *, state, data, group: Group):
         super().__init__(state=state, data=data.get("user", data.get("User")))
         self._data.update({
             "role": None
@@ -457,7 +472,24 @@ class GroupMember(User, _GroupMember):
         if self._data["role"] is None:
             raise RoleNotFound
 
-        return Role(state=self._state, data=self._data["role"], group=self.group)
+        return Role(state=self._state, data=self._data["role"],
+                    perm_data=self.group._perm_data[self._data["role"]["id"]], group=self.group)
+
+    async def change_role(self, role: Union[str, int, Role]):
+        """
+        Changes the member's role within the group.
+
+        Args:
+            role: :class:`.Role`, role name, or role ID.
+        """
+
+        n_role = await self.group.get_role(role)
+
+        if n_role is None:
+            raise RoleNotFound("Role {!r} not found in {!r}".format(role, self.group))
+        role = n_role
+
+        return await self._state.set_member_role(await self.group.id, await self.id, await role.id)
 
     @async_property
     async def rank(self):
@@ -502,9 +534,9 @@ class Role(_Role):
         Checks that role X's rank is less than or equal to role Y.
     """
 
-    __slots__ = ("_state", "_data", "group")
+    __slots__ = ("_state", "_data", "_perm_data", "group")
 
-    def __init__(self, *, state: Session, data, group):
+    def __init__(self, *, state: Session, data, perm_data, group):
         self._state = state
         self._data = CaseInsensitiveDict({
             "id": None,
@@ -515,6 +547,8 @@ class Role(_Role):
             "permissions": None,
         })
         self._update(data)
+
+        self._perm_data = perm_data
 
         self.group = group
 
@@ -622,14 +656,159 @@ class Role(_Role):
             await self._get_role_details()
         return self._data["rank"]
 
-    @async_property
-    async def member_count(self):
-        """|asyncprop|
-
-        Number of members belonging to this role.
-
-        :rtype: int
+    @property
+    def members(self):
         """
-        await self._get_role_details()
+        :class:`.AsyncIterable` for members belonging to this role.
 
-        return self._data["membercount"]
+        Yields:
+            :class:`.GroupMember`
+        """
+
+        return _RoleMembersIterator(state=self._state, opts={"role": self})
+
+    async def edit(self, name: str = None, description: str = None, rank: int = None):
+        """
+        Configures the role for the group.
+
+        Args:
+            name: New name for the role
+            description: New description for the role
+            rank: New rank for the role
+        """
+
+        vals = {
+            "name": name or await self.name,
+            "description": description or await self.description,
+            "rank": rank or await self.rank
+        }
+
+        new = await self._state.configure_role(await self.group.id, await self.id, vals)
+        self._update(new)
+
+        return new
+
+    @property
+    def permissions(self):
+        return Permissions(state=self._state, role=self, data=self._perm_data)
+
+
+class _PermsMeta(type):
+    _perm_map = {
+        "economy": {
+            "advertise": "advertiseGroup",
+            "manage_games": "manageGroupGames",
+            # "add_places": "addGroupPlaces",
+            "create_items": "createItems",
+            "manage_items": "manageItems",
+            "spend_funds": "spendGroupFunds",
+            # "view_payouts": "viewGroupPayouts",
+        },
+
+        "management": {
+            # "manage_clan": "manageClan",
+            "manage_relationships": "manageRelationships",
+            "view_audit_logs": "viewAuditLogs",
+        },
+
+        "membership": {
+            "change_rank": "changeRank",
+            "accept_members": "inviteMembers",
+            "remove_members": "removeMembers",
+        },
+
+        "posts": {
+            "view_wall": "viewWall",
+            "post_to_wall": "postToWall",
+            "delete_from_wall": "deleteFromWall",
+            "post_shout": "postToStatus",
+            "view_shout": "viewStatus",
+        }
+    }
+
+    def __init__(cls, name, bases, attrs):
+        super(_PermsMeta, cls).__init__(name, bases, attrs)
+
+        cls._perm_map = _PermsMeta._perm_map
+        cls._reverse_map = {}
+
+        for category, perms in _PermsMeta._perm_map.items():
+            for arg_name, json_name in perms.items():
+                cls._reverse_map[arg_name] = json_name
+
+                def get(self, j_name=json_name):
+                    return self._data[j_name]
+
+                def set(*args):
+                    raise KeyError("Attributes can't be set directly. Use Permissions.edit()")
+
+                setattr(cls, arg_name, property(
+                    get,
+                    set
+                ))
+
+
+class Permissions(metaclass=_PermsMeta):
+    """
+    Represent's a :class:`.Role`'s permissions within a group.
+
+    All permission attributes are read-only booleans. To edit permissions, use :meth:`.edit`
+    """
+
+    __slots__ = ("_state", "_data", "_role")
+
+    def __init__(self, *, state: Session, role, data):
+        self._state = state
+        self._data = data
+        self._role = role
+
+    def _update(self, perms):
+        self._data.update(perms)
+
+    @property
+    def role(self):
+        """
+        Role these permissions belong to.
+
+        Type:
+            :class:`.Role`
+        """
+        return self._role
+
+    async def edit(self, **kwargs):
+        """
+        Edits the permissions given in the keyword arguments. Example::
+
+            await perms.edit(accept_members=True, remove_members=False)
+        """
+
+        payload = {}
+
+        for key, val in kwargs.items():
+            if not hasattr(self, key):
+                raise KeyError("{!r} is not a valid permission.".format(key))
+            if not isinstance(val, bool):
+                raise ValueError("Permission value must be bool.")
+
+            payload[self._reverse_map[key]] = val
+
+            await self._state.edit_permissions(await self.role.group.id, await self.role.id, payload)
+
+            self._update(payload)
+
+
+class _RoleMembersIterator(AsyncIterator):
+    async def __aiter__(self):
+        async for data in self._state.get_role_members(self._opts["role"].group._data["id"],
+                                                       self._opts["role"]._data["id"]):
+            data = {
+                "role": self._opts["role"]._data,
+                "user": data
+            }
+
+            yield GroupMember(state=self._state, data=data, group=self._opts["role"].group)
+
+    async def count(self):
+        await self._opts["role"]._get_role_details()
+
+        return self._opts["role"]._data["membercount"]

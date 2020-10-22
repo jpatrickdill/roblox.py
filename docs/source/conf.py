@@ -81,7 +81,7 @@ html_theme_options = {
 }
 
 html_sidebars = {
-    "**": ["logo-text.html", "localtoc.html", "globaltoc.html", "searchbox.html"]
+    "**": ["localtoc.html", "globaltoc.html", "searchbox.html"]
 }
 
 html_experimental_html5_writer = True

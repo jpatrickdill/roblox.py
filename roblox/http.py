@@ -37,6 +37,8 @@ class Url:
     AssetDelivery = "https://assetdelivery.roblox.com/v1"
     Group1 = "https://groups.roblox.com/v1"
     Group2 = "https://groups.roblox.com/v2"
+    Develop = "https://develop.roblox.com/v1"
+    ItemConfig = "https://itemconfiguration.roblox.com/v1"
 
 
 def ok(resp):
@@ -605,39 +607,24 @@ class Session:
             else:
                 raise AssetError
 
-    async def get_group_details(self, group_id):
-        async with self.req("get", Url.Group1 + "/groups/{}".format(group_id)) as resp:
-            if ok(resp):
-                return await resp.json()
-            else:
-                raise GroupNotFound("Couldn't find group {!r}".format(group_id))
+    async def configure_asset_sales(self, asset_id, payload, release):
+        path = "release" if release else "update-price"
 
-    async def get_group_roles(self, group_id):
-        async with self.req("get", Url.Group1 + "/groups/{}/roles".format(group_id)) as resp:
-            if ok(resp):
-                return await resp.json()
-            else:
-                raise GroupNotFound("Couldn't find group {!r}".format(group_id))
+        async with self.req("get", Url.Roblox + "/catalog/configure?id={}#!/sales".format(asset_id)) as resp:
+            self.update_token(await resp.text())
 
-    async def get_group_members(self, group_id):
-        async for data in self.gen_pages(Url.Group1 + "/groups/{}/users".format(group_id)):
-            yield data
-
-    async def get_role_details(self, *role_id):
-        role_ids = ",".join([str(i) for i in role_id])
-        async with self.req("get", Url.Group1 + "/roles", params={"ids": role_ids}) as resp:
+        async with self.req("post", Url.ItemConfig + "/assets/{}/{}".format(asset_id, path), json=payload) as resp:
             if ok(resp):
-                return await resp.json()
+                return True
             else:
-                raise RoleNotFound
+                raise AssetError(await resp.json())
 
-    async def get_user_roles(self, user_id):
-        async with self.req("get", Url.Group1 + "/users/{}/groups/roles".format(user_id)) as resp:
+    async def configure_asset(self, asset_id, payload):
+        async with self.req("patch", Url.Develop + "/assets/{}/".format(asset_id), json=payload) as resp:
             if ok(resp):
-                return await resp.json()
+                return True
             else:
-                print(await resp.text())
-                raise UserError
+                raise AssetError(await resp.text())
 
     async def upload_asset(self, file, name, asset_type, group_id=None):
         rvturl = Url.Roblox + "/develop"
@@ -669,4 +656,91 @@ class Session:
         async with self.req("post", Url.Roblox + "/build/upload", data=form) as resp:
             print(resp.status)
             print(resp.url)
-            return ok(resp)
+
+            print(resp.headers.get("location"))
+
+            return resp.url, resp.headers.get("location")
+
+    async def get_group_details(self, group_id):
+        async with self.req("get", Url.Group1 + "/groups/{}".format(group_id)) as resp:
+            if ok(resp):
+                return await resp.json()
+            else:
+                raise GroupNotFound("Couldn't find group {!r}".format(group_id))
+
+    async def get_group_roles(self, group_id):
+        async with self.req("get", Url.Group1 + "/groups/{}/roles".format(group_id)) as resp:
+            if ok(resp):
+                return await resp.json()
+            else:
+                raise GroupNotFound("Couldn't find group {!r}".format(group_id))
+
+    async def get_group_members(self, group_id):
+        async for data in self.gen_pages(Url.Group1 + "/groups/{}/users".format(group_id)):
+            yield data
+
+    async def get_role_members(self, group_id, role_id):
+        async for data in self.gen_pages(Url.Group1 + "/groups/{}/roles/{}/users".format(group_id, role_id)):
+            yield data
+
+    async def get_role_details(self, *role_id):
+        role_ids = ",".join([str(i) for i in role_id])
+        async with self.req("get", Url.Group1 + "/roles", params={"ids": role_ids}) as resp:
+            if ok(resp):
+                return await resp.json()
+            else:
+                raise RoleNotFound
+
+    async def get_user_roles(self, user_id):
+        async with self.req("get", Url.Group1 + "/users/{}/groups/roles".format(user_id)) as resp:
+            if ok(resp):
+                return await resp.json()
+            else:
+                print(await resp.text())
+                raise UserError
+
+    async def set_member_role(self, group_id, user_id, role_id):
+        payload = {
+            "roleId": role_id
+        }
+
+        async with self.req("patch",
+                            Url.Group1 + "/groups/{}/users/{}".format(group_id, user_id), json=payload) as resp:
+            if ok(resp):
+                return True
+            else:
+                raise RoleError(await resp.text())
+
+    async def configure_role(self, group_id, role_id, vals):
+        async with self.req("patch",
+                            Url.Group1 + "/groups/{}/rolesets/{}".format(group_id, role_id), json=vals) as resp:
+            if ok(resp):
+                return await resp.json()
+            else:
+                raise RoleEditError(await resp.text())
+
+    async def get_permissions(self, group_id):
+        async with self.req("get", Url.Group1 + "/groups/{}/roles/permissions".format(group_id)) as resp:
+            if ok(resp):
+                return await resp.json()
+            else:
+                raise RoleError(await resp.text())
+
+    async def edit_permissions(self, group_id, role_id, new_perms):
+        payload = {
+            "permissions": new_perms
+        }
+        async with self.req("patch", Url.Group1 + "/groups/{}/roles/{}/permissions".format(group_id, role_id),
+                            json=payload) as resp:
+            if ok(resp):
+                return True
+            else:
+                raise PermissionError(await resp.text())
+
+    # game servers
+
+    async def get_game_servers(self, place_id, server_type):
+        async for data in self.gen_pages(Url.Game1 + "/games/{}/servers/{}".format(place_id, server_type)):
+            yield data
+
+

@@ -1,4 +1,6 @@
 import inspect
+from roblox.http import Session
+
 
 class AsyncIterator:
     """
@@ -10,7 +12,7 @@ class AsyncIterator:
 
     __slots__ = ("_gen", "_state", "_opts")
 
-    def __init__(self, *, gen=None, state=None, opts=None):
+    def __init__(self, *, gen=None, state: Session = None, opts=None):
         self._gen = gen
         self._state = state
         self._opts = opts or {}
@@ -30,7 +32,7 @@ class AsyncIterator:
 
         i = 0
         r = []
-        async for obj in self:
+        async for obj in self.__aiter__():
             r.append(obj)
 
             i += 1
@@ -71,13 +73,27 @@ class AsyncIterator:
         """
 
         async for obj in self:
-            if inspect.iscoroutinefunction(predicate):
-                matches = await predicate(obj)
-            else:
-                matches = predicate(obj)
+            if isinstance(predicate, dict):
+                # predicate is actually dict of required attributes
+                for k, v in predicate.items():
+                    if not hasattr(obj, k):
+                        continue
+                    potential = getattr(obj, k)
+                    if inspect.isawaitable(potential):  # await any async-properties
+                        potential = await potential
 
-            if matches:
-                return obj
+                    if potential != v:
+                        continue
+
+                    return obj
+            else:
+                if inspect.iscoroutinefunction(predicate):
+                    matches = await predicate(obj)
+                else:
+                    matches = predicate(obj)
+
+                if matches:
+                    return obj
 
     async def find_all(self, predicate):
         """

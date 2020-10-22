@@ -3,7 +3,7 @@
 API Reference
 =============
 
-This section provides references for the API of roblox.py.
+This section details the roblox.py API.
 
 Client
 ------
@@ -66,6 +66,13 @@ Roles
 
 .. autoclass:: Role
     :members:
+
+Role Permissions
+~~~~~~~~~~~~~~~~
+
+.. autoclass:: Permissions
+    :members:
+    :undoc-members:
 
 Members
 ~~~~~~~

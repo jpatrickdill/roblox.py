@@ -348,6 +348,34 @@ class Universe(DisplayPage, Votable, metaclass=ABCMeta):
         raise NotImplemented
 
 
+class Server(metaclass=ABCMeta):
+    """An ABC that details common operations on a Roblox game server."""
+
+    @property
+    @abstractmethod
+    async def id(self) -> str:
+        """Async property that returns the server's UUID."""
+        raise NotImplemented
+
+    @property
+    @abstractmethod
+    async def playing(self) -> int:
+        """Async property that returns the number of players in this server."""
+        raise NotImplemented
+
+    @property
+    @abstractmethod
+    async def max_players(self) -> int:
+        """Async property that returns the max number of players in the server."""
+        raise NotImplemented
+
+    @property
+    @abstractmethod
+    async def access_code(self) -> str:
+        """Access code used to join the game."""
+        raise NotImplemented
+
+
 class Group(DisplayPage, metaclass=ABCMeta):
     """ABC detailing operations on a Roblox Group."""
 
@@ -396,6 +424,11 @@ class GroupMember(User, metaclass=ABCMeta):
         """Async property that eturns the member's group role."""
         raise NotImplemented
 
+    @abstractmethod
+    async def change_role(self, role):
+        """Changes member's role in group."""
+        raise NotImplemented
+
     @property
     @abstractmethod
     async def rank(self) -> int:
@@ -432,8 +465,8 @@ class Role(metaclass=ABCMeta):
 
     @property
     @abstractmethod
-    async def member_count(self) -> int:
-        """Async property that returns the number of members with this role."""
+    def members(self):
+        """Members of this role."""
         raise NotImplemented
 
 

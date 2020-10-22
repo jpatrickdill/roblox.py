@@ -17,7 +17,6 @@ roblox.py is an easy-to-use, Pythonic, async API wrapper for the Roblox Web APIs
 
 
 .. toctree::
-   :caption: roblox.py
    :maxdepth: 2
 
    index

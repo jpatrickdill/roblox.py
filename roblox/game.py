@@ -1,13 +1,15 @@
 import logging
-from abc import ABC
 
 import maya
 from CaseInsensitiveDict import CaseInsensitiveDict
 from async_property import async_property, async_cached_property
 
-from roblox.asset import Asset
+from roblox.abc import Server as _BaseServer
 from roblox.abc import Universe as _BaseUniverse
+from roblox.asset import Asset
+from roblox.enums import ServerType
 from roblox.http import Session
+from roblox.iterables import AsyncIterator
 
 log = logging.getLogger(__name__)
 
@@ -51,6 +53,20 @@ class Place(Asset):
             await self._get_place_details()
 
         return self._data["url"]
+
+    def servers(self, server_type: ServerType = None):
+        server_type = server_type or ServerType.Public
+
+        return ServersIterator(state=self._state, opts={
+            "place": self,
+            "type": server_type.value
+        })
+
+
+class ServersIterator(AsyncIterator):
+    async def __aiter__(self):
+        async for server_data in self._state.get_game_servers(await self._opts["place"].id, self._opts["type"]):
+            yield Server(state=self._state, data=server_data, place=self._opts["place"])
 
 
 # util decorator
@@ -199,3 +215,70 @@ class Universe(_BaseUniverse):
     async def favorites(self) -> int:
         data = await self._state.universe_favorites(await self.id)
         return data.get("favoritesCount")
+
+
+class Server(_BaseServer):
+    def __init__(self, *, state: Session, data, place: Place):
+        self._state = state
+        self._data = CaseInsensitiveDict({
+            "id": None,
+            "maxplayers": None,
+            "playing": None,
+            "fps": None,
+            "ping": None,
+            "name": None,
+            "playerids": None,
+            "vipserverid": None,
+            "accesscode": None,
+            "owneruserid": None
+        })
+        self.place = place
+
+        self._update(data)
+
+    def __repr__(self):
+        if self._data.get("vipserverid"):
+            return "PrivateServer({!r}, {!r})".format(self.place, self._data.get("name"))
+        else:
+            return "Server({!r}, {!r})".format(self.place, self._data.get("id"))
+
+    def _update(self, data):
+        for k in list(data.keys()):
+            data[k.lower()] = data[k]
+
+        self._data.update(data)
+
+    @async_property
+    async def id(self) -> str:
+        return self._data.get("id")
+
+    @async_property
+    async def name(self) -> str:
+        return self._data.get("name")
+
+    @async_property
+    async def playing(self) -> int:
+        return self._data.get("playing") or 0
+
+    @async_property
+    async def max_players(self) -> int:
+        return self._data.get("maxplayers")
+
+    @async_property
+    async def access_code(self) -> str:
+        return self._data.get("accesscode")
+
+    @async_property
+    async def server_type(self) -> ServerType:
+        return ServerType.Public if self._data.get("vipserverid") is None else ServerType.Private
+
+    async def update_stats(self):
+        """Searches for server in the game's server list in order to update the stats."""
+
+        async for data in self._state.get_game_servers(await self.place.id, (await self.server_type).value):
+            if "accessCode" in data and data["accessCode"] == await self.access_code:
+                self._update(data)
+                return
+            elif "id" in data and data["id"] == await self.id:
+                self._update(data)
+                return

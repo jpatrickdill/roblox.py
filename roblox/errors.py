@@ -76,3 +76,7 @@ class RoleError(GroupError):
 
 class RoleNotFound(RoleError):
     pass
+
+
+class RoleEditError(RoleError):
+    pass

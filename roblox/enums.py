@@ -54,3 +54,10 @@ class AssetType(IntEnum):
     PoseAnimation = 56
     EarAccessory = 57
     Video = 62
+
+
+class ServerType(Enum):
+    Public = "Public"
+    Friend = "Friend"
+    Private = "VIP"
+    VIP = "VIP"
